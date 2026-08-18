@@ -1,0 +1,291 @@
+esphome:
+#  compile_process_limit: 1
+  name: ${unitName}
+  friendly_name: ${friendlyName}
+  min_version: 2024.6.0
+  name_add_mac_suffix: false
+  project:
+    name: esphome.web
+    version: dev
+
+
+esp32:
+  board: ${boardName}
+
+# Enable logging
+logger:
+
+# Allow Over-The-Air updates
+ota:
+- platform: esphome
+
+# Allow provisioning Wi-Fi via serial
+improv_serial:
+
+wifi:
+  # Set up a wifi access point
+  ssid: "----"
+  password: "----"
+
+  ap: 
+    ssid: "----"
+    password: "----"
+
+api:
+  encryption:
+    key: "----"
+
+# In combination with the `ap` this allows the user
+# to provision wifi credentials to the device via WiFi AP.
+captive_portal:
+
+
+substitutions:
+  boardName: esp32dev
+  unitName: cassette
+  friendlyName: Cassette
+
+  buttonPinOK:   GPIO27
+  buttonPinPrev: GPIO26
+  buttonPinNext: GPIO25
+  buttonPinBack: GPIO33
+
+  i2cData:  GPIO21
+  i2cClock: GPIO22
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+i2c:
+  sda: ${i2cData}
+  scl: ${i2cClock}
+  scan: true  # useful during setup to confirm the display is found
+  frequency: 400kHz
+
+
+font:
+  - file: "OpenSans-Regular.ttf"
+    id: big_font
+    size: 31
+    glyphs: ":0123456789"
+
+  - file: "OpenSans-Light.ttf"
+    id: small_font
+    size: 12
+    glyphs: ">-:/&!°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ._"
+
+  - file: "OpenSans-Light.ttf"
+    id: tiny_font
+    size: 10
+    glyphs: ":0123456789Conectig."
+
+globals:
+  - id: menu_index
+    type: int
+    initial_value: '0'
+  - id: menu_depth
+    type: int
+    initial_value: '0'
+  - id: submenu_index
+    type: int
+    initial_value: '0'
+
+  - id: top_items
+    type: std::vector<std::string>
+    initial_value: '{"Lights", "Scenes", "Settings"}'
+
+  - id: lights
+    type: std::vector<std::string>
+    initial_value: '{"Little Lamp", "Smart Bulb", "Salt Lamp"}'
+
+  - id: lights_v
+    type: std::vector<std::string>
+    initial_value: '{"light.little_lamp", "light.smart_bulb", "light.salt_lamp"}'
+
+  - id: scenes
+    type: std::vector<std::string>
+    initial_value: '{"Lights Off", "Cozy", "Orange", "Pink", "Red", "Bedtime", "Work mode" }'
+
+  - id: scenes_v
+    type: std::vector<std::string>
+    initial_value: '{"scene.lighting_off", "scene.lighting_cozy", "scene.lighting_orange", "scene.lighting_pink", "scene.lighting_red", "scene.bed_time_start", "scene.lighting_work"}'
+
+  - id: settings
+    type: std::vector<std::string>
+    initial_value: '{"Brightness", "Timeout"}'
+
+  - id: selected_entity
+    type: std::string
+    initial_value: '""'
+
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: ${buttonPinNext}
+      mode: INPUT_PULLUP
+    name: "Down"
+    filters:
+      - delayed_on: 20ms
+    on_press:
+      then:
+        - lambda: |-
+            std::vector<std::string>* items;
+            if (id(menu_depth) == 0) {
+              items = &id(top_items);
+            } else if (id(submenu_index) == 0) {
+              items = &id(lights);
+            } else if (id(submenu_index) == 1) {
+              items = &id(scenes);
+            } else {
+              items = &id(settings);
+            }
+            id(menu_index) = (id(menu_index) + 1) % items->size();
+        - component.update: my_display
+
+  - platform: gpio
+    pin:
+      number: ${buttonPinPrev}
+      mode: INPUT_PULLUP
+    name: "Up"
+    filters:
+      - delayed_on: 20ms
+    on_press:
+      then:
+        - lambda: |-
+            std::vector<std::string>* items;
+            if (id(menu_depth) == 0) {
+              items = &id(top_items);
+            } else if (id(submenu_index) == 0) {
+              items = &id(lights);
+            } else if (id(submenu_index) == 1) {
+              items = &id(scenes);
+            } else {
+              items = &id(settings);
+            }
+            id(menu_index) = (id(menu_index) - 1 + items->size()) % items->size();
+        - component.update: my_display
+
+  - platform: gpio
+    pin:
+      number: ${buttonPinOK}
+      mode: INPUT_PULLUP
+    name: "Select"
+    filters:
+      - delayed_on: 200ms
+    on_press:
+      then:
+        - lambda: |-
+            if (id(menu_depth) == 0) {
+              id(submenu_index) = id(menu_index);
+              id(menu_depth) = 1;
+              id(menu_index) = 0;
+            }
+            else {
+              id(selected_entity) = id(menu_index); // just for menu bug, ensures select button can't be triggered multiple times into an entity.
+            }
+        - if:
+            condition:
+              lambda: 'return id(menu_depth) == 1 && id(submenu_index) == 0 && id(selected_entity) != "";'
+            then:
+              - homeassistant.service:
+                  service: light.toggle
+                  data_template:
+                    entity_id: !lambda 'return id(lights_v)[id(menu_index)].c_str();'
+                      
+        - if:
+            condition:
+              lambda: 'return id(menu_depth) == 1 && id(submenu_index) == 1 && id(selected_entity) != "";'
+            then:
+              - homeassistant.service:
+                  service: scene.turn_on
+                  data_template:
+                    entity_id: !lambda 'return id(scenes_v)[id(menu_index)].c_str();'
+        - component.update: my_display
+
+  - platform: gpio
+    pin:
+      number: ${buttonPinBack}
+      mode: INPUT_PULLUP
+    name: "Back"
+    filters:
+      - delayed_on: 20ms
+    on_press:
+      then:
+        - lambda: |-
+            if (id(menu_depth) == 1) {
+              id(menu_depth) = 0;
+              id(menu_index) = id(submenu_index);
+              id(selected_entity) = "";
+            }
+        - component.update: my_display
+
+display:
+  - platform: ssd1306_i2c
+    id: my_display
+    model: "SSD1306 128x64"
+    address: 0x3C
+    lambda: |-
+      // Header time
+      it.strftime(128, 7, id(small_font), COLOR_ON, TextAlign::CENTER_RIGHT, "%H:%M", id(ha_time).now());
+
+      // Header wifi
+        for(int i=0; i<5; i++) if(i<id(wifistep).state) it.filled_rectangle(2+i*5,8-i*2,4,i*2+4); else it.rectangle(2+i*5,8-i*2,4,i*2+4);
+
+      // Display things
+      it.line(0, 12, 128, 12);
+
+
+      std::vector<std::string>* items;
+      if (id(menu_depth) == 0) {
+        items = &id(top_items);
+      } else if (id(submenu_index) == 0) {
+        items = &id(lights);
+      } else if (id(submenu_index) == 1) {
+        items = &id(scenes);
+      } else {
+        items = &id(settings);
+      }
+
+      // Draw title bar
+      std::string title = (id(menu_depth) == 0)
+        ? "Menu"
+        : id(top_items)[id(submenu_index)];
+
+      it.print(64, 7, id(small_font), TextAlign::CENTER, title.c_str());
+
+      // Draw menu items (3 visible at a time, scrolling)
+      int visible = 4;
+      int start = 0;
+      if (id(menu_index) >= visible) {
+        start = id(menu_index) - visible + 1;
+      }
+      for (int i = 0; i < visible && (start + i) < (int)items->size(); i++) {
+        int idx = start + i;
+        int y = 10 + (i * 12);
+        if (idx == id(menu_index)) {
+          it.filled_rectangle(0, y+5, 128, 11, COLOR_ON);
+          it.filled_rectangle(2, y+5, 124, 11, COLOR_OFF);
+
+          it.filled_rectangle(1, y+6, 126, 9, COLOR_OFF);
+          it.filled_rectangle(0, y+7, 128, 7, COLOR_OFF);
+          it.print(4, y + 2, id(small_font), COLOR_ON, (*items)[idx].c_str());
+        } else {
+          it.print(4, y + 2, id(small_font), COLOR_ON, (*items)[idx].c_str());
+        }
+      }
+
+
+
+sensor: 
+  - platform: wifi_signal
+    id: wifisignal
+    update_interval: 20s
+    
+  - platform: template
+    id: wifistep
+    update_interval: 20s
+    lambda: |-
+      if(isnan(id(wifisignal).state)) return 0;
+      else return round((id(wifisignal).state+100)/10);
